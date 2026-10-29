@@ -4,20 +4,39 @@
   "description": "TXLib Development Automation Utility",
   "version": "0.0.1",
   "engines": {
-		"vscode": "^1.116.0"
+    "vscode": "^1.116.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+		"onStartupFinished",
+		"onTaskType:txlib-dev-utils"
+	],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "txlib-dev-utils.helloWorld",
-        "title": "Hello World"
+        "command": "txlib-dev-utils.cmakeBuildAndSync",
+        "title": "TX: CMake Build & Sync TXLib Compilation Database"
       }
-    ]
+    ],
+		"configuration": {
+      "title": "TXLib Development Automation Utility",
+      "properties": {
+        "tx.devUtils.txlibPath": {
+          "type": "string",
+          "default": "~/Programming/dev/libs/TXLib",
+          "description": "Path to TXLib, absolute."
+        },
+				"tx.devUtils.sourceDirectory": {
+          "type": "string",
+					"scope": "resource",
+          "default": "${workspaceDefaultFolder}",
+          "description": "Path to project root directory to be built."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
@@ -34,16 +53,16 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.140.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "typescript-eslint": "^8.61.1",
-    "eslint": "^10.5.0",
+    "@types/vscode": "^1.116.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
     "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
     "npm-run-all": "^4.1.5",
     "typescript": "^6.0.3",
-    "@vscode/test-cli": "^0.0.15",
-    "@vscode/test-electron": "^3.0.0"
+    "typescript-eslint": "^8.61.1"
   },
   "overrides": {
     "diff": "^8.0.4",
