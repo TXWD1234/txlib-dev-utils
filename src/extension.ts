@@ -9,14 +9,12 @@ export type CMakeProject = NonNullable<Awaited<ReturnType<CMakeToolsApi['getProj
 class Engine {
 	private config?: vscode.WorkspaceConfiguration;
 	private cmakeApi?: CMakeToolsApi;
-	private project?: CMakeProject;
+	private projectSourceDir?: vscode.Uri;
 
 	public static async projectExist() {
 		const engine = new Engine();
 		const initRes = await engine.init();
-		if (initRes || !engine.project) {
-			return false;
-		}
+		if (initRes || !await engine.checkTargetCMakeProjectValidity()) { return false; }
 		return true;
 	}
 
@@ -27,35 +25,71 @@ class Engine {
 			log.appendLine(initRes);
 			return false;
 		}
-		if(!await engine.acquireTargetCMakeProjectViaAsking(log)) { return false; }
+		if (!await engine.acquireTargetCMakeProjectViaAsking(log)) { return false; }
+		if (!await engine.checkTargetCMakeProjectValidity()) { return false; }
+
+		let success = true;
 
 		try {
 			log.appendLine("[Status]: Starting CMake build...");
-			const configureRes = await engine.project!.configureWithResult();
-			if(configureRes.stdout) { log.appendLine(configureRes.stdout); }
-			if(configureRes.stderr) { log.appendLine(configureRes.stderr); }
-	    	const buildRes = await engine.project!.buildWithResult();
-			if(buildRes.stdout) { log.appendLine(buildRes.stdout); }
-			if(buildRes.stderr) { log.appendLine(buildRes.stderr); }
+			await engine.focusCMakeOutputChannel();
+
+			const project = await engine.cmakeApi!.getProject(engine.projectSourceDir!);
+			
+			const configureRes = await project!.configureWithResult();
+			if (configureRes.stdout) { log.appendLine(configureRes.stdout); }
+	    	if (configureRes.exitCode !== 0) { return engine.buildFailed(log, configureRes.stderr); }
+			
+			const buildRes = await project!.buildWithResult();
+			if (buildRes.stdout) { log.appendLine(buildRes.stdout); }
+	    	if (buildRes.exitCode !== 0) { return engine.buildFailed(log, configureRes.stderr); }
+
+        	// const exitCode = await vscode.commands.executeCommand<number>(
+			// 	'cmake.build', undefined, false, engine.projectSourceDir);
+        	// if (exitCode !== 0 && exitCode !== undefined) {
+		    // 	log.appendLine(`[Error]: Build failed with exit code ${exitCode}.`);
+		    // 	vscode.window.showErrorMessage(`TX: Failed to build project. Check CMake/Build output tab for detailed information.`);
+			// 	return false;
+        	// }
 		    log.appendLine("[Status]: Build succeeded.");
 		} catch (err: any) {
-			log.appendLine(`[Error]: Failed to build project. ${err}`);
-		    vscode.window.showErrorMessage(`TX: Failed to build project. Check CMake/Build output tab for detailed information.`);
-			return false;
+			return engine.buildFailed(log, err);
 		}
 
 		try {
 			log.appendLine("[Status]: Starting Compilation Database Sync...");
 			await engine.syncCompilationDatabaseWithTXLib(log);
 			log.appendLine("[Status]: Sync succeeded.");
+			success = true;
 		} catch (err: any) {
 			log.appendLine(`[Error]: Failed to sync compilation database with TXLib. ${err}`);
 		    vscode.window.showErrorMessage(`TX: Failed to sync compilation database with TXLib.`);
-			return false;
+			success = false;
 		}
 
 		log.appendLine("");
-		return true;
+		log.show(false);
+		return success;
+	}
+	private buildFailed(log: vscode.OutputChannel, err: string | undefined) {
+		log.appendLine(`[Error]: Failed to build project. \n${err}`);
+		vscode.window.showErrorMessage(`TX: Failed to build project. Check CMake/Build output tab for detailed information.`);
+		return false;
+	}
+	private async focusCMakeOutputChannel(): Promise<void> {
+		try {
+			// Query all registered internal commands
+			const allCommands = await vscode.commands.getCommands(true);
+
+			// Find the command that reveals the CMake Tools output channel
+			const cmakeOutputCmd = allCommands.find(cmd => 
+				cmd.startsWith('workbench.action.output.show.extension-output-ms-vscode.cmake-tools')
+			);
+
+			if (cmakeOutputCmd) {
+				await vscode.commands.executeCommand(cmakeOutputCmd);
+			}
+		} catch {}
 	}
 	
 	// return string when cannot proceed, undefined when success
@@ -103,10 +137,7 @@ class Engine {
 
 		// Single folder workspace: no ambiguity
 		if (folders.length === 1) {
-			this.project = await this.cmakeApi?.getProject(folders[0].uri);
-			if (!this.project) {
-				throw new Error("Invalid project returned by CMake API");
-			}
+			this.projectSourceDir = folders[0].uri;
 			return;
 		}
 
@@ -115,14 +146,13 @@ class Engine {
 		if (sourceDirectory && sourceDirectory.trim() !== '') {
 			const sourceDirPath = Engine.resolvePath(sourceDirectory);
 			if (!fs.existsSync(sourceDirPath)) { throw new Error(`${sourceDirPath} does not exist.`); }
-			this.project = await this.cmakeApi?.getProject(vscode.Uri.file(sourceDirPath));
-			if (!this.project) { throw new Error("Invalid project returned by CMake API"); }
+			this.projectSourceDir = vscode.Uri.file(sourceDirPath);
 		}
 	}
 
 	// I can feel my brain leaking from my ears writing this name
 	private async acquireTargetCMakeProjectViaAsking(log: vscode.OutputChannel) {
-		if (this.project) { return true; }
+		if (await this.checkTargetCMakeProjectValidity()) { return true; }
 		const pickedFolder = await vscode.window.showWorkspaceFolderPick({
 			placeHolder: "Select the CMake project folder to build and sync"
 		});
@@ -132,11 +162,7 @@ class Engine {
 			return false;
 		}
 
-		this.project = await this.cmakeApi?.getProject(pickedFolder.uri);
-		if (!this.project) {
-			log.appendLine("[Error]: Invalid project instance returned by CMake API");
-			return false;
-		}
+		this.projectSourceDir = pickedFolder.uri;
 
 		// write picked folder to config
 		await this.config?.update(
@@ -147,8 +173,14 @@ class Engine {
 		return true;
 	}
 
+	private async checkTargetCMakeProjectValidity(): Promise<boolean> {
+		if (!this.projectSourceDir) { return false; }
+		if (!await this.cmakeApi!.getProject(this.projectSourceDir)) { return false; }
+		return true;
+	}
+
 	private async syncCompilationDatabaseWithTXLib(log: vscode.OutputChannel) {
-		const buildDir = await this.project!.getBuildDirectory();
+		const buildDir = await (await this.cmakeApi!.getProject(this.projectSourceDir!))!.getBuildDirectory();
 		if (!buildDir) {
 			log.appendLine("[Error]: Failed to acquire build directory from project.");
 			throw new Error("Failed to acquire build directory from project.");
