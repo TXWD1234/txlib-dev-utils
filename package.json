@@ -19,6 +19,10 @@
       {
         "command": "txlib-dev-utils.cmakeBuildAndSync",
         "title": "TX: CMake Build & Sync TXLib Compilation Database"
+      },
+			{
+        "command": "txlib-dev-utils.clearCompilationDatabase",
+        "title": "TX: Clear TXLib Compilation Database"
       }
     ],
 		"configuration": {

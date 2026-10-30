@@ -18,6 +18,22 @@ class Engine {
 		return true;
 	}
 
+	public static async acquireCompilationDatabasePath(): Promise<string> {
+		const config = vscode.workspace.getConfiguration('tx.devUtils');
+		if(!config) {
+			throw new Error("Failed to acquire config instance.");
+		}
+
+		const txlibPath = config.get<string>('txlibPath');
+		if (!txlibPath) {
+			throw new Error("Failed to access config: txlibPath.");
+		}
+	
+		return path.join(
+			Engine.resolvePath(txlibPath),
+			"SampleProject/build");
+	}
+
 	public static async run(log: vscode.OutputChannel) {		
 		const engine = new Engine();
 		const initRes = await engine.init();
@@ -42,7 +58,7 @@ class Engine {
 			
 			const buildRes = await project!.buildWithResult();
 			if (buildRes.stdout) { log.appendLine(buildRes.stdout); }
-	    	if (buildRes.exitCode !== 0) { return engine.buildFailed(log, configureRes.stderr); }
+	    	if (buildRes.exitCode !== 0) { return engine.buildFailed(log, buildRes.stderr); }
 
         	// const exitCode = await vscode.commands.executeCommand<number>(
 			// 	'cmake.build', undefined, false, engine.projectSourceDir);
@@ -190,21 +206,17 @@ class Engine {
 		// compile_commands.json is guaranteed to be in buildDir
 		// /path/to/compile_commands.json
 		const srcPath = path.join(buildDir, 'compile_commands.json');
+		if (!fs.existsSync(srcPath)) { throw new Error(`${srcPath} does not exist.`); }
 
-		const txlibPath = this.config!.get<string>('txlibPath');
-		if (!txlibPath) {
-			log.appendLine("[Error]: Failed to access config: txlibPath.");
-			throw new Error("Failed to access config: txlibPath.");
-		}
 		const targetPath = path.join(
-			Engine.resolvePath(txlibPath),
-			"SampleProject/build/compile_commands.json");
-		
-		if(!fs.existsSync(srcPath)) { throw new Error(`${srcPath} does not exist.`); }
+			await Engine.acquireCompilationDatabasePath(),
+			"compile_commands.json");
 
 		fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 		fs.copyFileSync(srcPath, targetPath);
 		log.appendLine(`[Status] Synced: ${srcPath} -> ${targetPath}`);
+
+		
 	}
 
 	private static resolvePath(inputPath: string): string {
@@ -339,11 +351,23 @@ export async function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel("TXLib Dev Utils");
 	context.subscriptions.push(log);
 
-	const disposable = vscode.commands.registerCommand('txlib-dev-utils.cmakeBuildAndSync', async () => {
+	const cmakeBuildAndSync = vscode.commands.registerCommand('txlib-dev-utils.cmakeBuildAndSync', async () => {
 		log.show(false);
 		return await Engine.run(log);
 	});
-	context.subscriptions.push(disposable);
+	context.subscriptions.push(cmakeBuildAndSync);
+
+	const clearCompilationDatabase = vscode.commands.registerCommand('txlib-dev-utils.clearCompilationDatabase', async () => {
+		try {
+			fs.rmSync(await Engine.acquireCompilationDatabasePath(), { recursive: true, force: true });
+			log.appendLine(`[Status]: Successfully cleared TXLib compilation database.`);
+		} catch (err: any) {
+			log.appendLine(`[Error]: Failed to clear compilation database. ${err}`);
+			vscode.window.showErrorMessage(`TX: Failed to clear compilation database.`);
+		}
+		log.appendLine("");
+	});
+	context.subscriptions.push(clearCompilationDatabase);
 
 	context.subscriptions.push(
 	    vscode.tasks.registerTaskProvider(
